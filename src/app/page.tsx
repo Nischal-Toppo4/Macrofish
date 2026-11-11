@@ -1,116 +1,167 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { buildAgents, generateReport, generateRounds } from "@/lib/simulation/engine";
+import type { PolicyMode, RiskLevel, RunRecord, ScenarioInput } from "@/lib/simulation/types";
 
-type Agent = {
-  name: string;
-  role: string;
-  color: string;
-  stance: string;
-};
+function createMockRun(input: ScenarioInput): RunRecord {
+  const agents = buildAgents(input);
+  const rounds = generateRounds(input, agents);
 
-const agents: Agent[] = [
-  { name: "Maya Chen", role: "Product lead", color: "#7c5cff", stance: "Optimistic" },
-  { name: "Ravi Shah", role: "Skeptical customer", color: "#20b8a6", stance: "Cautious" },
-  { name: "Elena Torres", role: "Market analyst", color: "#f29d49", stance: "Analytical" },
-  { name: "Jon Bell", role: "Community moderator", color: "#e8688a", stance: "Protective" },
-  { name: "Noah Williams", role: "Early adopter", color: "#5c9ded", stance: "Enthusiastic" },
-];
+  return {
+    id: `mock-${Date.now()}`,
+    status: "running",
+    input,
+    agents,
+    rounds,
+    report: generateReport(input, rounds),
+    createdAt: new Date().toISOString(),
+  };
+}
 
-const seedEvents = [
-  ["Maya Chen", "The launch should start with a small invite-only cohort to protect trust."],
-  ["Ravi Shah", "I like the premise, but unclear pricing will make people hesitate."],
-  ["Elena Torres", "Early signals suggest the product will spread through niche communities first."],
-  ["Jon Bell", "Moderation and transparency need to be visible before the public launch."],
-  ["Noah Williams", "I would share this immediately if onboarding takes less than five minutes."],
-];
+export default function ScenarioSetupPage() {
+  const router = useRouter();
 
-export default function Home() {
-  const [scenario, setScenario] = useState(
-    "A new AI productivity assistant launches with a free plan and a paid team tier. How will users, competitors, and online communities react over the next 90 days?"
+  const [context, setContext] = useState(
+    "A new AI productivity assistant launches with a free plan and a paid team tier."
+  );
+  const [question, setQuestion] = useState(
+    "How will users, competitors, and online communities react over the next 90 days?"
   );
   const [rounds, setRounds] = useState(3);
-  const [isRunning, setIsRunning] = useState(false);
-  const [completedRounds, setCompletedRounds] = useState(0);
-  const [activeTab, setActiveTab] = useState("Overview");
+  const [agentCount, setAgentCount] = useState(5);
+  const [riskLevel, setRiskLevel] = useState<RiskLevel>("balanced");
+  const [policyMode, setPolicyMode] = useState<PolicyMode>("conservative");
+  const [loading, setLoading] = useState(false);
+  const [statusMessage, setStatusMessage] = useState("");
 
-  const visibleEvents = useMemo(
-    () => seedEvents.slice(0, Math.max(2, Math.min(seedEvents.length, completedRounds + 2))),
-    [completedRounds]
-  );
+  async function startSimulation() {
+    if (!context.trim() || !question.trim()) {
+      setStatusMessage("Please provide both context and prediction question.");
+      return;
+    }
 
-  function runSimulation() {
-    setIsRunning(true);
-    setCompletedRounds(0);
-    let round = 0;
-    const timer = window.setInterval(() => {
-      round += 1;
-      setCompletedRounds(round);
-      if (round >= rounds) {
-        window.clearInterval(timer);
-        setIsRunning(false);
-      }
-    }, 650);
+    setLoading(true);
+    setStatusMessage("");
+
+    const input: ScenarioInput = {
+      context,
+      question,
+      rounds,
+      agentCount,
+      riskLevel,
+      policyMode,
+    };
+
+    try {
+      const createResponse = await fetch("/api/runs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+
+      if (!createResponse.ok) throw new Error("create run failed");
+      const createPayload = (await createResponse.json()) as { runId: string };
+
+      const startResponse = await fetch(`/api/runs/${createPayload.runId}/start`, {
+        method: "POST",
+      });
+
+      if (!startResponse.ok) throw new Error("start run failed");
+
+      router.push(`/simulation/${createPayload.runId}`);
+    } catch {
+      const mockRun = createMockRun(input);
+      sessionStorage.setItem(`mock-run:${mockRun.id}`, JSON.stringify(mockRun));
+      setStatusMessage("API unavailable; running deterministic local mock mode.");
+      router.push(`/simulation/${mockRun.id}?mock=1`);
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
-    <main className="app-shell">
-      <header className="topbar">
-        <div className="brand"><span className="brand-mark">✦</span><span>Miro<span className="brand-fish">Fish</span></span><span className="beta">MVP</span></div>
-        <div className="topbar-actions"><span className="status-dot" /> Local simulation <button className="avatar">NC</button></div>
-      </header>
+    <main className="page-shell">
+      <section className="hero-card">
+        <p className="eyebrow">SCENARIO SETUP</p>
+        <h1>MacroFish MVP Prototype</h1>
+        <p className="subtitle">
+          Upload context, ask a prediction question, and run a multi-agent simulation for your presentation.
+        </p>
+      </section>
 
-      <div className="workspace">
-        <aside className="sidebar">
-          <div className="sidebar-section">
-            <div className="eyebrow">WORKSPACE</div>
-            <button className="side-link active"><span>◈</span> New simulation</button>
-            <button className="side-link"><span>▤</span> Saved scenarios</button>
-            <button className="side-link"><span>◷</span> Activity</button>
-          </div>
-          <div className="sidebar-section recent">
-            <div className="eyebrow">RECENT</div>
-            <button className="scenario-link"><span className="scenario-icon purple">A</span><span>AI assistant launch</span></button>
-            <button className="scenario-link"><span className="scenario-icon orange">M</span><span>Market expansion</span></button>
-            <button className="scenario-link"><span className="scenario-icon teal">P</span><span>Policy response test</span></button>
-          </div>
-          <div className="sidebar-footer"><div className="help">?</div><span>How it works</span><span className="settings">⚙</span></div>
-        </aside>
+      <section className="panel">
+        <div className="panel-header">
+          <h2>1) Seed context</h2>
+          <span>Input data for simulation intake</span>
+        </div>
+        <textarea
+          value={context}
+          onChange={(event) => setContext(event.target.value)}
+          placeholder="Paste notes, reports, or story context"
+        />
+      </section>
 
-        <section className="content">
-          <div className="page-heading">
-            <div><p className="kicker">SCENARIO LAB</p><h1>Rehearse the future.</h1><p className="subtitle">Give your scenario a cast of agents and watch the most likely outcomes emerge.</p></div>
-            <button className="secondary-button">＋ Import source</button>
-          </div>
+      <section className="panel">
+        <div className="panel-header">
+          <h2>2) Prediction question</h2>
+          <span>Define what outcome you want</span>
+        </div>
+        <textarea
+          value={question}
+          onChange={(event) => setQuestion(event.target.value)}
+          placeholder="What should the simulation forecast?"
+        />
+      </section>
 
-          <div className="grid">
-            <section className="panel scenario-panel">
-              <div className="panel-heading"><div><span className="step">01</span><h2>Set the scenario</h2></div><span className="panel-hint">What do you want to explore?</span></div>
-              <textarea value={scenario} onChange={(event) => setScenario(event.target.value)} />
-              <div className="field-row">
-                <label><span>SIMULATION ROUNDS</span><select value={rounds} onChange={(event) => setRounds(Number(event.target.value))}><option value={2}>2 rounds</option><option value={3}>3 rounds</option><option value={4}>4 rounds</option><option value={5}>5 rounds</option></select></label>
-                <label><span>AGENT TEMPERATURE</span><select defaultValue="Balanced"><option>Conservative</option><option>Balanced</option><option>Chaotic</option></select></label>
-              </div>
-              <button className="run-button" onClick={runSimulation} disabled={isRunning || !scenario.trim()}>{isRunning ? `Simulating round ${completedRounds + 1}…` : completedRounds > 0 ? "Run again" : "Run simulation"} <span>→</span></button>
-            </section>
+      <section className="panel compact-grid">
+        <label>
+          <span>Rounds</span>
+          <select value={rounds} onChange={(event) => setRounds(Number(event.target.value))}>
+            {[2, 3, 4, 5, 6].map((value) => (
+              <option value={value} key={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+        </label>
 
-            <section className="panel agents-panel">
-              <div className="panel-heading"><div><span className="step">02</span><h2>Choose your cast</h2></div><span className="panel-hint">{agents.length} active agents</span></div>
-              <div className="agent-list">{agents.map((agent) => <div className="agent" key={agent.name}><div className="agent-avatar" style={{ background: agent.color }}>{agent.name.split(" ").map((n) => n[0]).join("")}</div><div className="agent-copy"><strong>{agent.name}</strong><span>{agent.role}</span></div><span className="stance">{agent.stance}</span><span className="check">✓</span></div>)}</div>
-              <button className="add-agent">＋ Add custom agent</button>
-            </section>
-          </div>
+        <label>
+          <span>Agents</span>
+          <select value={agentCount} onChange={(event) => setAgentCount(Number(event.target.value))}>
+            {[3, 4, 5, 6, 7].map((value) => (
+              <option value={value} key={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+        </label>
 
-          <section className="results-section">
-            <div className="results-header"><div><p className="kicker">LIVE SIMULATION</p><h2>What&apos;s emerging</h2></div><div className="round-progress"><span className="progress-label">{completedRounds === 0 ? "Ready to run" : `${completedRounds} of ${rounds} rounds`}</span><div className="progress-bar"><i style={{ width: `${(completedRounds / rounds) * 100}%` }} /></div></div></div>
-            <div className="tabs">{["Overview", "Agent activity", "Signals"].map((tab) => <button className={activeTab === tab ? "tab active-tab" : "tab"} onClick={() => setActiveTab(tab)} key={tab}>{tab}</button>)}</div>
-            {activeTab === "Overview" && <div className="outcome-grid"><div className="outcome-card primary-outcome"><div className="card-label">LEADING OUTCOME <span>↗</span></div><h3>Trust builds before growth</h3><p>Agents converge on a cautious launch: a transparent free tier and visible early adopters create enough trust for organic team adoption.</p><div className="confidence"><span>Confidence</span><strong>{completedRounds ? "78%" : "—"}</strong><div className="confidence-bar"><i style={{ width: completedRounds ? "78%" : "0%" }} /></div></div></div><div className="outcome-card"><div className="card-label">EMERGING SIGNAL</div><h3>Community proof matters</h3><p>Independent reviews and hands-on examples are more persuasive than polished launch messaging.</p><span className="signal-tag">High momentum</span></div><div className="outcome-card"><div className="card-label">WATCH OUT FOR</div><h3>Pricing friction</h3><p>Unclear team limits may slow conversion during the second phase of adoption.</p><span className="signal-tag amber">Needs attention</span></div></div>}
-            {activeTab === "Agent activity" && <div className="activity-feed">{visibleEvents.map(([name, text], index) => <div className="feed-item" key={name}><span className="feed-number">0{index + 1}</span><div><strong>{name}</strong><p>{text}</p></div><span className="feed-round">R{Math.min(rounds, Math.floor(index / 2) + 1)}</span></div>)}</div>}
-            {activeTab === "Signals" && <div className="signals"><div className="signal-row"><span>Organic community sharing</span><b>84</b><div><i style={{ width: "84%" }} /></div></div><div className="signal-row"><span>Pricing confusion</span><b>61</b><div><i className="warn" style={{ width: "61%" }} /></div></div><div className="signal-row"><span>Competitor response</span><b>39</b><div><i className="soft" style={{ width: "39%" }} /></div></div></div>}
-          </section>
-          <footer className="footer-note">MiroFish MVP · Simulations are exploratory scenarios, not guaranteed predictions.</footer>
-        </section>
-      </div>
+        <label>
+          <span>Risk level</span>
+          <select value={riskLevel} onChange={(event) => setRiskLevel(event.target.value as RiskLevel)}>
+            <option value="conservative">Conservative</option>
+            <option value="balanced">Balanced</option>
+            <option value="aggressive">Aggressive</option>
+          </select>
+        </label>
+
+        <label>
+          <span>Policy mode (presentation toggle)</span>
+          <select value={policyMode} onChange={(event) => setPolicyMode(event.target.value as PolicyMode)}>
+            <option value="conservative">Conservative</option>
+            <option value="aggressive">Aggressive</option>
+          </select>
+        </label>
+      </section>
+
+      <section className="actions-row">
+        <button type="button" className="primary-button" onClick={startSimulation} disabled={loading}>
+          {loading ? "Starting…" : "Start simulation"}
+        </button>
+        <p>{statusMessage || "Runs in API mode, with automatic local mock fallback."}</p>
+      </section>
     </main>
   );
 }
